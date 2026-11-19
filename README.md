@@ -19,11 +19,30 @@ To open an existing UTF-8 source file, pass its path:
 
 If the file does not exist, RaTeQ starts with an empty buffer. Type a math fragment such as `\frac{1}{2}` and press **Enter** to render it. Run `./target/release/rateq --help` for the command-line options.
 
+## Save and export
+
+| Key | Where | Action |
+|---|---|---|
+| Ctrl+S | Edit | Open source save |
+| Ctrl+E | Edit | Choose an export format |
+| P / S | Export | Choose PNG / SVG |
+| Tab | File entry | Complete the path; press again to list matches |
+| Up / Down | File entry | Scroll completion matches |
+| Ctrl+U | File entry | Clear the path |
+| Enter | File entry | Accept displayed warnings and write the file |
+| Ctrl+X | Export or file entry | Cancel |
+
+In single-window mode, save is available in the Editor and export in the Preview. When exiting with unsaved changes, you can save, discard, or return to the editor. Validation errors must be corrected before writing.
+
+Export requires a successful render. If the source has since changed or the latest render failed, RaTeQ warns that the export will use the older retained result.
+
+For unnamed sources, RaTeQ suggests a filename made from the word lists in [assets/names.toml](assets/names.toml). One name is reused for source and export suggestions. The lists are embedded in the binary, so rebuild after editing them; if either list is empty, the suggested stem is `equation`.
+
 ## Current status
 
-The `0.1.0` implementation provides an editor and RaTeX preview. **Source saving and PNG/SVG export are not implemented**; they are planned for `0.2.0`. If you exit after editing, you can cancel the exit or discard your changes, but you cannot save them in RaTeQ yet. Resume, persistence setup, contextual Help, and reflow of an outdated preview are also unfinished. The `--resume` option cannot reopen a file in this build. The current build creates no application-data directories.
+The `0.2.0` implementation includes source saving, PNG/SVG export, and file entry.minimum terminal sizing, application-data directories (thus, `--resume` cannot reopen a file yet), contextual Help, and reflow of an outdated preview will be implemented in later versions.
 
-The automated checks pass, but the interactive editor and graphics still need validation in the primary development terminal. Run the tests with:
+Terminal compatibility and release packaging needs validation. Run the tests with:
 
 ```sh
 cargo test
