@@ -182,7 +182,7 @@ If the source has no unsaved changes, exit immediately. Otherwise, open the Exit
 Ctrl+G opens Help from every interaction, including Find. List all public keyboard shortcuts for the calling session, active window, and interaction, including shortcuts omitted from the Navigation bar.
 
 - Explain terminal-dependent features that are unavailable and hidden from the Navigation bar.
-- Omit the hidden Ctrl+F fallback from single-window Preview and hidden previous-match navigation.
+- Omit the hidden Ctrl+F fallback from single-window Preview.
 - Ctrl+X returns to the exact calling interaction, active window, focus, and in-progress input.
 - Show Help full-screen as a scrollable contextual shortcut list.
 

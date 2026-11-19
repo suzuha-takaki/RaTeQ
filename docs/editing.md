@@ -5,7 +5,6 @@
 | Key | Action |
 |---|---|
 | ↑ ↓ ← → | Move cursor in the Editor window |
-| Shift+Enter | Newline (terminal dependent) |
 | Ctrl+N | Newline |
 | Tab | Insert one space |
 
@@ -31,12 +30,11 @@ Navigation bar
 | Key | Action |
 |---|---|
 | Enter | Next match |
-| Shift+Enter | Previous match (hidden, terminal dependent) |
 | Ctrl+X | Close Find and return focus to Editor |
 
 - Match literal, case-sensitive text in the source.
 - Match navigation wraps at the beginning and end of the source.
-- Previous-match navigation is hidden from Help and the Navigation bar. When Shift+Enter is unavailable, Enter continues forward and wraps to the first match.
+- To reach an earlier match, press Enter repeatedly to move forward and wrap around.
 
 | Case | RaTeQ message bar |
 |---|---|

@@ -44,4 +44,5 @@ All current product decisions are resolved.
 | 2026-11-19 | Persistence approval | Adopted | Ask before setting up platform-appropriate application directories, with default/custom/cancel choices | [Persistence](session.md#persistence) |
 | 2026-11-19 | Persistence setup | Adopted | Ask on first interactive launch, remember the approved location, and exit on Cancel before creating application data. Standalone help/version run directly. | [Persistence](session.md#persistence) |
 | 2026-11-19 | Multiline paste | Adopted | Insert pasted newlines as source text, then follow normal manual/live rendering behavior | [Input](editing.md#input) |
+| 2026-11-19 | Shift+Enter shortcuts | Removed | The development terminal does not distinguish Shift+Enter from Enter. Use Ctrl+N for a newline and Enter to cycle forward through Find matches. | [Input](editing.md#input), [Find](editing.md#find) |
 | 2026-11-19 | Support location | Adopted | Keep support information in the main README and release planning in ROADMAP | [Support](README.md#support), [Roadmap](ROADMAP.md) |

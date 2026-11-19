@@ -103,10 +103,7 @@ Mouse selection and native terminal copy/paste work in WezTerm. Record limitatio
 
 ### Keyboard
 
-| Feature | Dependency | Alternative |
-|---|---|---|
-| Shift+Enter newline | Terminal distinguishes Shift+Enter from Enter | Ctrl+N |
-| Shift+Enter previous match (hidden) | Terminal distinguishes Shift+Enter from Enter | Enter moves forward and wraps |
+Use Ctrl+N to insert a newline. In Find, Enter moves forward and wraps, so repeated presses can reach an earlier match. See [Input](editing.md#input) and [Find](editing.md#find).
 
 Apply feature-availability rules to public shortcuts. Hidden shortcuts stay omitted from the Navigation bar and Help.
 
