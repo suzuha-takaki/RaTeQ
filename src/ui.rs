@@ -1,6 +1,7 @@
 use crate::{
     cli::Options,
     files::{self, FileType, Files},
+    persistence::Store,
     render,
 };
 use image::DynamicImage;
@@ -125,6 +126,8 @@ struct App {
     mode: Mode,
     help: Option<Help>,
     files: Files,
+    persistence: Option<Store>,
+    exit_warning: Option<String>,
     file_entry: Option<FileEntry>,
     search: String,
     message: String,
@@ -156,6 +159,8 @@ impl App {
             mode: Mode::Edit,
             help: None,
             files,
+            persistence: None,
+            exit_warning: None,
             file_entry: None,
             search: String::new(),
             message: String::new(),
@@ -436,12 +441,27 @@ impl App {
                 Some(format!("E205 ERROR: Cannot record saved path: {e}"));
             return false;
         }
-        if kind == FileType::Source {
+        let history_warning = if kind == FileType::Source {
             self.initial = self.source();
-        }
+            self.persistence
+                .as_ref()
+                .and_then(|store| store.record_source(&path).err())
+                .map(|e| {
+                    format!(
+                        "W206 WARNING: Source saved, but resume history could not be updated: {e}"
+                    )
+                })
+        } else {
+            None
+        };
         self.file_entry = None;
         self.mode = Mode::Edit;
-        self.message = format!("Wrote {}", path.display());
+        self.message = history_warning
+            .clone()
+            .unwrap_or_else(|| format!("Wrote {}", path.display()));
+        if from_exit {
+            self.exit_warning = history_warning;
+        }
         from_exit
     }
 }
@@ -1061,11 +1081,11 @@ fn draw(frame: &mut ratatui::Frame, app: &mut App, picker: &Picker) {
 const MIN_COLUMNS: u16 = 80;
 const MIN_ROWS: u16 = 24;
 
-fn below_minimum(width: u16, height: u16) -> bool {
+pub(crate) fn below_minimum(width: u16, height: u16) -> bool {
     width < MIN_COLUMNS || height < MIN_ROWS
 }
 
-fn draw_resize(frame: &mut ratatui::Frame) {
+pub(crate) fn draw_resize(frame: &mut ratatui::Frame) {
     let area = frame.area();
     let text = format!(
         "W403 WARNING: Terminal too small. Please resize.\nMinimum: {MIN_COLUMNS} columns and {MIN_ROWS} rows.\nCurrent size: {} columns and {} rows.",
@@ -1106,7 +1126,12 @@ fn handle_event(app: &mut App, event: Event, width: u32, too_small: bool) -> boo
     }
 }
 
-pub fn run(opts: Options, source: String) -> io::Result<()> {
+pub fn run(
+    opts: Options,
+    source: String,
+    persistence: Option<Store>,
+    startup_message: Option<String>,
+) -> io::Result<()> {
     let picker = Picker::from_query_stdio().unwrap_or_else(|_| Picker::halfblocks());
     let mut terminal = ratatui::try_init()?;
     if let Err(e) = execute!(io::stdout(), EnableBracketedPaste) {
@@ -1114,6 +1139,10 @@ pub fn run(opts: Options, source: String) -> io::Result<()> {
         return Err(e);
     }
     let mut app = App::new(opts, source);
+    app.persistence = persistence;
+    if let Some(message) = startup_message {
+        app.message = message;
+    }
     if app.opts.live {
         app.deadline = Some(Instant::now() + Duration::from_millis(300));
     }
@@ -1166,6 +1195,9 @@ pub fn run(opts: Options, source: String) -> io::Result<()> {
     }
     let _ = execute!(io::stdout(), DisableBracketedPaste);
     ratatui::restore();
+    if let Some(warning) = app.exit_warning {
+        eprintln!("{warning}");
+    }
     result
 }
 
@@ -1362,6 +1394,67 @@ mod tests {
         assert!(app.file_entry.as_ref().unwrap().from_exit);
         assert!(press(&mut app, KeyCode::Enter, KeyModifiers::NONE));
         assert_eq!(std::fs::read_to_string(&dest).unwrap(), "x+1+2");
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn successful_source_save_updates_resume_history() {
+        let dir = std::env::temp_dir().join(format!(
+            "rateq-ui-history-{}-{:x}",
+            std::process::id(),
+            fastrand::u64(..)
+        ));
+        let locations = crate::persistence::Locations {
+            default_data: dir.join("data"),
+            locator: dir.join("config/approved-location"),
+        };
+        let store = locations.approve(&locations.default_data).unwrap();
+        let source = dir.join("source.txt");
+        let mut app = App::new(Options::default(), String::new());
+        app.persistence = Some(store.clone());
+        app.insert("x+1");
+        press(&mut app, KeyCode::Char('s'), KeyModifiers::CONTROL);
+        path(&mut app, &source);
+        press(&mut app, KeyCode::Enter, KeyModifiers::NONE);
+        assert_eq!(store.last_source().unwrap(), Some(source.clone()));
+        app.insert("+2");
+        press(&mut app, KeyCode::Char('s'), KeyModifiers::CONTROL);
+        path(&mut app, &dir.join("missing/source.txt"));
+        press(&mut app, KeyCode::Enter, KeyModifiers::NONE);
+        assert_eq!(store.last_source().unwrap(), Some(source));
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn history_failure_does_not_undo_successful_source_save() {
+        let dir = std::env::temp_dir().join(format!(
+            "rateq-ui-history-error-{}-{:x}",
+            std::process::id(),
+            fastrand::u64(..)
+        ));
+        let locations = crate::persistence::Locations {
+            default_data: dir.join("data"),
+            locator: dir.join("config/approved-location"),
+        };
+        let store = locations.approve(&locations.default_data).unwrap();
+        std::fs::remove_dir(&locations.default_data).unwrap();
+        let source = dir.join("source.txt");
+        let mut app = App::new(Options::default(), String::new());
+        app.persistence = Some(store);
+        app.insert("x");
+        press(&mut app, KeyCode::Char('s'), KeyModifiers::CONTROL);
+        path(&mut app, &source);
+        press(&mut app, KeyCode::Enter, KeyModifiers::NONE);
+        assert_eq!(std::fs::read_to_string(&source).unwrap(), "x");
+        assert_eq!(app.initial, "x");
+        assert!(app.message.contains("W206"));
+        assert!(app.mode == Mode::Edit);
+        app.insert("y");
+        press(&mut app, KeyCode::Char('x'), KeyModifiers::CONTROL);
+        press(&mut app, KeyCode::Char('y'), KeyModifiers::NONE);
+        assert!(press(&mut app, KeyCode::Enter, KeyModifiers::NONE));
+        assert!(app.exit_warning.as_deref().unwrap().contains("W206"));
+        assert_eq!(std::fs::read_to_string(&source).unwrap(), "xy");
         std::fs::remove_dir_all(dir).unwrap();
     }
 

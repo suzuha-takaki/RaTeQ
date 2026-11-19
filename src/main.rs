@@ -1,6 +1,8 @@
 mod cli;
 mod files;
+mod persistence;
 mod render;
+mod setup;
 mod ui;
 
 use std::{
@@ -9,17 +11,18 @@ use std::{
     path::Path,
 };
 
+fn decode(bytes: Vec<u8>) -> Result<String, String> {
+    if bytes.contains(&0) {
+        return Err("E201 error: RaTeQ edits text; binary input is not supported".into());
+    }
+    let text = String::from_utf8(bytes).map_err(|_| {
+        "E201 error: RaTeQ edits UTF-8 text; binary input is not supported".to_string()
+    })?;
+    Ok(text.strip_prefix('\u{feff}').unwrap_or(&text).to_owned())
+}
 fn load(path: &Path) -> Result<String, String> {
     match fs::read(path) {
-        Ok(bytes) => {
-            if bytes.contains(&0) {
-                return Err("E201 error: RaTeQ edits text; binary input is not supported".into());
-            }
-            let text = String::from_utf8(bytes).map_err(|_| {
-                "E201 error: RaTeQ edits UTF-8 text; binary input is not supported".to_string()
-            })?;
-            Ok(text.strip_prefix('\u{feff}').unwrap_or(&text).to_owned())
-        }
+        Ok(bytes) => decode(bytes),
         Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(String::new()),
         Err(e) => Err(format!("error: cannot open {}: {e}", path.display())),
     }
@@ -44,17 +47,70 @@ fn run() -> Result<(), String> {
     match cli::parse(&args)? {
         cli::Command::Help => println!("{}", cli::HELP),
         cli::Command::Version => println!("rateq {}", env!("CARGO_PKG_VERSION")),
-        cli::Command::Run(options) => {
-            if options.resume {
-                return Err("E105 error: no saved source file to resume".into());
+        cli::Command::Run(mut options) => {
+            let mut startup_message = None;
+            let locations = match persistence::Locations::from_environment() {
+                Ok(locations) => Some(locations),
+                Err(e) if options.resume => {
+                    return Err(format!(
+                        "E207 error: cannot locate persistence configuration: {e}"
+                    ))
+                }
+                Err(_) => None,
+            };
+            let mut store = match locations
+                .as_ref()
+                .map(persistence::Locations::discover)
+                .transpose()
+            {
+                Ok(store) => store.flatten(),
+                Err(e) if options.resume => {
+                    return Err(format!(
+                        "E207 error: cannot read persistence configuration: {e}"
+                    ))
+                }
+                Err(e) => {
+                    startup_message =
+                        Some(format!("W207 WARNING: Resume history is unavailable: {e}"));
+                    None
+                }
+            };
+            if options.resume && store.is_none() {
+                let locations = locations
+                    .as_ref()
+                    .expect("resume requires known application locations");
+                match setup::run(locations).map_err(|e| e.to_string())? {
+                    setup::Outcome::Enabled(enabled) => store = Some(enabled),
+                    setup::Outcome::Continue => {
+                        options.resume = false;
+                        startup_message =
+                            Some("Resume was skipped; persistence is not enabled.".into());
+                    }
+                    setup::Outcome::Cancel => return Ok(()),
+                }
             }
-            let source = options
-                .file
-                .as_deref()
-                .map(load)
-                .transpose()?
-                .unwrap_or_default();
-            ui::run(options, source).map_err(|e| e.to_string())?;
+            let source = if options.resume {
+                let source_path = store
+                    .as_ref()
+                    .expect("resume requires enabled persistence")
+                    .last_source()
+                    .map_err(|e| format!("E208 error: cannot read resume history: {e}"))?
+                    .ok_or("E105 error: no saved source file to resume\nSave a source in a regular session to establish resume history.")?;
+                let bytes = fs::read(&source_path).map_err(|e| {
+                    format!("E206 error: cannot reopen {}: {e}", source_path.display())
+                })?;
+                let source = decode(bytes)?;
+                options.file = Some(source_path);
+                source
+            } else {
+                options
+                    .file
+                    .as_deref()
+                    .map(load)
+                    .transpose()?
+                    .unwrap_or_default()
+            };
+            ui::run(options, source, store, startup_message).map_err(|e| e.to_string())?;
         }
     }
     Ok(())
