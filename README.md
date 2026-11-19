@@ -21,7 +21,7 @@ If the file does not exist, RaTeQ starts with an empty buffer. Type a math fragm
 
 Press **Ctrl+G** for contextual Help and **Ctrl+X** to return. RaTeQ requires a terminal of at least 80 columns by 24 rows; a resize screen appears below that size.
 
-The `--resume` option is not yet available; application-data setup and resume are planned for `0.4.0`.
+Use `./target/release/rateq --resume` to reopen the last source saved through RaTeQ. The first Resume request offers opt-in persistence setup; ordinary launches do not create application-data directories. You can choose a data location, continue without persistence, or cancel. If there is no saved-file history yet, Resume reports `E105`; save a source afterward to establish the history.
 
 ## Save and export
 
