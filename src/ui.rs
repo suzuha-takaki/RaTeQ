@@ -1,4 +1,8 @@
-use crate::{cli::Options, render};
+use crate::{
+    cli::Options,
+    files::{self, FileType, Files},
+    render,
+};
 use image::DynamicImage;
 use ratatui::{
     crossterm::{
@@ -11,7 +15,7 @@ use ratatui::{
     layout::{Constraint, Layout, Rect},
     style::{Color, Style},
     text::Line,
-    widgets::{Block, Borders, Paragraph},
+    widgets::{Block, Borders, Paragraph, Wrap},
 };
 use ratatui_image::{picker::Picker, Resize, StatefulImage};
 use std::{
@@ -20,7 +24,7 @@ use std::{
     thread::{self, JoinHandle},
     time::{Duration, Instant},
 };
-use unicode_width::UnicodeWidthStr;
+use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 struct Job {
     child: Child,
@@ -75,6 +79,29 @@ enum Mode {
     Edit,
     Find,
     Exit,
+    Export,
+    File,
+}
+struct FileEntry {
+    kind: FileType,
+    text: Vec<char>,
+    cursor: usize,
+    from_exit: bool,
+    candidates: Option<Vec<String>>,
+    candidate_scroll: u16,
+    completed: bool,
+    error: Option<String>,
+}
+impl FileEntry {
+    fn path(&self) -> String {
+        self.text.iter().collect()
+    }
+    fn edited(&mut self) {
+        self.candidates = None;
+        self.candidate_scroll = 0;
+        self.completed = false;
+        self.error = None;
+    }
 }
 struct App {
     opts: Options,
@@ -90,6 +117,8 @@ struct App {
     failed: bool,
     diagnostic: String,
     mode: Mode,
+    files: Files,
+    file_entry: Option<FileEntry>,
     search: String,
     message: String,
     single_preview: bool,
@@ -98,6 +127,10 @@ struct App {
 }
 impl App {
     fn new(opts: Options, source: String) -> Self {
+        let files = Files::new(
+            std::env::current_dir().unwrap_or_default(),
+            opts.file.clone(),
+        );
         Self {
             opts,
             chars: source.chars().collect(),
@@ -112,6 +145,8 @@ impl App {
             failed: false,
             diagnostic: String::new(),
             mode: Mode::Edit,
+            files,
+            file_entry: None,
             search: String::new(),
             message: String::new(),
             single_preview: false,
@@ -269,15 +304,170 @@ impl App {
         };
         self.message.clear();
     }
+
+    fn open_file(&mut self, kind: FileType, from_exit: bool) {
+        let text: Vec<char> = self.files.default_path(kind).chars().collect();
+        self.file_entry = Some(FileEntry {
+            kind,
+            cursor: text.len(),
+            text,
+            from_exit,
+            candidates: None,
+            candidate_scroll: 0,
+            completed: false,
+            error: None,
+        });
+        self.message.clear();
+        self.mode = Mode::File;
+    }
+
+    fn export_warning(&self) -> Option<&'static str> {
+        if self.retained.is_none() {
+            Some("E301 ERROR: Render a preview before exporting")
+        } else if self.failed || self.retained.as_ref().is_some_and(|s| *s != self.source()) {
+            Some("W205 WARNING: Exporting the displayed preview, which differs from the current source or predates a failed render")
+        } else {
+            None
+        }
+    }
+
+    // Returns true only for a successful save requested by Exit.
+    fn submit_file(&mut self) -> bool {
+        let entry = self.file_entry.as_ref().unwrap();
+        let kind = entry.kind;
+        let from_exit = entry.from_exit;
+        let path = match self.files.validate(&entry.path(), kind) {
+            Ok((path, _)) => path,
+            Err(_) => return false,
+        };
+        let contents = match kind {
+            FileType::Source => Ok(self.source().into_bytes()),
+            FileType::Png => self
+                .retained
+                .as_deref()
+                .ok_or("E301 ERROR: Render a preview before exporting".to_string())
+                .and_then(render::export_png),
+            FileType::Svg => self
+                .retained
+                .as_deref()
+                .ok_or("E301 ERROR: Render a preview before exporting".to_string())
+                .and_then(render::export_svg),
+        };
+        let result = contents.and_then(|bytes| {
+            std::fs::write(&path, bytes).map_err(|e| format!("E205 ERROR: Cannot write file: {e}"))
+        });
+        if let Err(e) = result {
+            self.file_entry.as_mut().unwrap().error = Some(e);
+            return false;
+        }
+        if let Err(e) = self.files.saved(kind, &path) {
+            self.file_entry.as_mut().unwrap().error =
+                Some(format!("E205 ERROR: Cannot record saved path: {e}"));
+            return false;
+        }
+        if kind == FileType::Source {
+            self.initial = self.source();
+        }
+        self.file_entry = None;
+        self.mode = Mode::Edit;
+        self.message = format!("Wrote {}", path.display());
+        from_exit
+    }
 }
 fn key(app: &mut App, key: KeyEvent, width: u32) -> bool {
     if key.kind != KeyEventKind::Press && key.kind != KeyEventKind::Repeat {
         return false;
     }
     let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
+    if app.mode == Mode::File {
+        if key.code == KeyCode::Char('x') && ctrl {
+            let from_exit = app.file_entry.take().unwrap().from_exit;
+            app.mode = if from_exit { Mode::Exit } else { Mode::Edit };
+            app.message.clear();
+            return false;
+        }
+        if key.code == KeyCode::Enter {
+            return app.submit_file();
+        }
+        let entry = app.file_entry.as_mut().unwrap();
+        match key.code {
+            KeyCode::Tab => {
+                let matches = app.files.complete(&entry.path());
+                if entry.completed {
+                    entry.candidates = Some(matches.iter().map(|(p, _)| p.clone()).collect());
+                    entry.candidate_scroll = 0;
+                } else {
+                    let completed = files::common_prefix(&matches);
+                    if !matches.is_empty() {
+                        entry.text = completed.chars().collect();
+                        entry.cursor = entry.text.len();
+                    }
+                    entry.completed = true;
+                    entry.candidates = if matches.is_empty() {
+                        Some(Vec::new())
+                    } else {
+                        None
+                    };
+                }
+            }
+            KeyCode::Left => entry.cursor = entry.cursor.saturating_sub(1),
+            KeyCode::Right => entry.cursor = (entry.cursor + 1).min(entry.text.len()),
+            KeyCode::Up if entry.candidates.is_some() => {
+                entry.candidate_scroll = entry.candidate_scroll.saturating_sub(1)
+            }
+            KeyCode::Down if entry.candidates.is_some() => {
+                entry.candidate_scroll = entry.candidate_scroll.saturating_add(1)
+            }
+            KeyCode::Home => entry.cursor = 0,
+            KeyCode::End => entry.cursor = entry.text.len(),
+            KeyCode::Char('u') if ctrl => {
+                entry.text.clear();
+                entry.cursor = 0;
+                entry.edited();
+            }
+            KeyCode::Backspace if entry.cursor > 0 => {
+                entry.cursor -= 1;
+                entry.text.remove(entry.cursor);
+                entry.edited();
+            }
+            KeyCode::Delete if entry.cursor < entry.text.len() => {
+                entry.text.remove(entry.cursor);
+                entry.edited();
+            }
+            KeyCode::Char(c)
+                if !ctrl
+                    && !key
+                        .modifiers
+                        .intersects(KeyModifiers::ALT | KeyModifiers::SUPER) =>
+            {
+                entry.text.insert(entry.cursor, c);
+                entry.cursor += 1;
+                entry.edited();
+            }
+            _ => {}
+        }
+        return false;
+    }
+    if app.mode == Mode::Export {
+        match key.code {
+            KeyCode::Char('x') if ctrl => {
+                app.mode = Mode::Edit;
+                app.message.clear();
+            }
+            KeyCode::Char('p' | 'P') if !ctrl && app.retained.is_some() => {
+                app.open_file(FileType::Png, false)
+            }
+            KeyCode::Char('s' | 'S') if !ctrl && app.retained.is_some() => {
+                app.open_file(FileType::Svg, false)
+            }
+            _ => {}
+        }
+        return false;
+    }
     if app.mode == Mode::Exit {
         match key.code {
             KeyCode::Char('n' | 'N') if !ctrl => return true,
+            KeyCode::Char('y' | 'Y') if !ctrl => app.open_file(FileType::Source, true),
             KeyCode::Char('x') if ctrl => app.mode = Mode::Edit,
             _ => {}
         }
@@ -313,6 +503,11 @@ fn key(app: &mut App, key: KeyEvent, width: u32) -> bool {
             app.single_preview = false;
             app.mode = Mode::Find;
             app.search.clear();
+        }
+        KeyCode::Char('s') if ctrl && !app.single_preview => app.open_file(FileType::Source, false),
+        KeyCode::Char('e') if ctrl && (!app.opts.single || app.single_preview) => {
+            app.mode = Mode::Export;
+            app.message.clear();
         }
         KeyCode::Char('n') if ctrl && !app.single_preview => app.insert("\n"),
         KeyCode::Enter if key.modifiers.contains(KeyModifiers::SHIFT) && !app.single_preview => {
@@ -364,13 +559,14 @@ fn areas(
     area: Rect,
     single: bool,
     preview: bool,
-    extra: bool,
+    entry_lines: u16,
+    message_lines: u16,
 ) -> (Rect, Rect, Rect, Rect, Rect, Rect) {
     let [windows, latex, message, entry, nav] = Layout::vertical([
         Constraint::Min(0),
         Constraint::Length(1),
-        Constraint::Length(1),
-        Constraint::Length(u16::from(extra)),
+        Constraint::Length(message_lines),
+        Constraint::Length(entry_lines),
         Constraint::Length(1),
     ])
     .areas(area);
@@ -390,12 +586,109 @@ fn areas(
 fn preview_width(area: Rect, picker: &Picker) -> u32 {
     u32::from(area.width.saturating_sub(2).max(1)) * u32::from(picker.font_size().width.max(1))
 }
+fn candidate_text(entry: &FileEntry) -> Option<String> {
+    entry.candidates.as_ref().map(|candidates| {
+        candidates
+            .iter()
+            .map(|path| {
+                let is_dir = path.ends_with('/');
+                let name = path
+                    .trim_end_matches('/')
+                    .rsplit('/')
+                    .next()
+                    .unwrap_or(path);
+                format!("{name}{}", if is_dir { "/" } else { "" })
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+    })
+}
+fn entry_lines(app: &App, area: Rect) -> u16 {
+    match app.mode {
+        Mode::Edit => 0,
+        Mode::File => {
+            let extra = app
+                .file_entry
+                .as_ref()
+                .and_then(candidate_text)
+                .map_or(0, |text| {
+                    let lines = Paragraph::new(text)
+                        .wrap(Wrap { trim: false })
+                        .line_count(area.width.max(1))
+                        .max(1);
+                    let available = area
+                        .height
+                        .saturating_sub(message_lines(app, area.width).saturating_add(4));
+                    (lines.min(5) as u16).min(available)
+                });
+            2 + extra
+        }
+        _ => 1,
+    }
+}
+fn interaction_message(app: &App) -> String {
+    match app.mode {
+        Mode::Exit => "W501 WARNING: Answering \"No\" will destroy changes made".to_owned(),
+        Mode::Export => app.export_warning().unwrap_or("").to_owned(),
+        Mode::File => {
+            let entry = app.file_entry.as_ref().unwrap();
+            if let Some(error) = &entry.error {
+                return error.clone();
+            }
+            match app.files.validate(&entry.path(), entry.kind) {
+                Err(error) => error.to_owned(),
+                Ok((_, mut warnings)) => {
+                    if entry.kind != FileType::Source {
+                        if let Some(warning) = app.export_warning() {
+                            warnings.push(warning);
+                        }
+                    }
+                    warnings.join("\n")
+                }
+            }
+        }
+        _ => app.message.clone(),
+    }
+}
+fn message_lines(app: &App, width: u16) -> u16 {
+    Paragraph::new(interaction_message(app))
+        .wrap(Wrap { trim: false })
+        .line_count(width.max(1))
+        .clamp(1, usize::from(u16::MAX)) as u16
+}
+fn visible_path(entry: &FileEntry, width: u16) -> (String, u16) {
+    let available = usize::from(width.saturating_sub(15));
+    if available == 0 {
+        return (String::new(), 0);
+    }
+    let mut start = 0;
+    let mut before: usize = entry.text[..entry.cursor]
+        .iter()
+        .map(|c| c.width().unwrap_or(0))
+        .sum();
+    while before >= available && start < entry.cursor {
+        before = before.saturating_sub(entry.text[start].width().unwrap_or(0));
+        start += 1;
+    }
+    let mut shown = String::new();
+    let mut used = 0;
+    for c in &entry.text[start..] {
+        let w = c.width().unwrap_or(0);
+        if used + w > available {
+            break;
+        }
+        shown.push(*c);
+        used += w;
+    }
+    (shown, before as u16)
+}
 fn draw(frame: &mut ratatui::Frame, app: &mut App, picker: &Picker) {
     let (editor, preview, latex, message, entry, nav) = areas(
         frame.area(),
         app.opts.single,
         app.single_preview,
-        app.mode != Mode::Edit,
+        entry_lines(app, frame.area()),
+        message_lines(app, frame.area().width),
     );
     let too_small = if app.opts.single {
         editor.height.max(preview.height) < 3
@@ -477,35 +770,78 @@ fn draw(frame: &mut ratatui::Frame, app: &mut App, picker: &Picker) {
         }
     }
     frame.render_widget(Paragraph::new(format!("LaTeX: {}", app.diagnostic)), latex);
-    let msg = if too_small {
+    let msg = if too_small && app.mode == Mode::Edit {
         "W403 WARNING: Terminal too small to show the Editor/Preview area. Please resize."
-    } else if app.mode == Mode::Exit {
-        "W501 WARNING: Answering \"No\" will destroy changes made"
+            .to_owned()
     } else {
-        &app.message
+        interaction_message(app)
     };
     frame.render_widget(
-        Paragraph::new(msg).style(Style::default().fg(Color::Yellow)),
+        Paragraph::new(msg)
+            .wrap(Wrap { trim: false })
+            .style(Style::default().fg(Color::Yellow)),
         message,
     );
     let (field, navigation) = match app.mode {
         Mode::Find => (format!("Search: {}", app.search), "ENTER Next   ^X Close"),
-        Mode::Exit => (
-            "Save modified buffer?  N No (discard); saving is not available yet".into(),
-            "N Discard   ^X Cancel",
-        ),
+        Mode::Exit => ("Save modified buffer?  Y Yes   N No".into(), "^X Cancel"),
+        Mode::Export => ("Export preview as?  P png   S svg".into(), "^X Cancel"),
+        Mode::File => {
+            let e = app.file_entry.as_ref().unwrap();
+            let valid = app.files.validate(&e.path(), e.kind).is_ok();
+            let (path, _) = visible_path(e, entry.width);
+            (
+                format!("File Type: {}\nFile to write: {}", e.kind.label(), path),
+                if e.candidates.as_ref().is_some_and(|c| !c.is_empty()) && entry.height > 2 {
+                    if valid {
+                        "↑↓ Matches   TAB Complete   ^X Cancel   ENTER Complete"
+                    } else {
+                        "↑↓ Matches   TAB Complete   ^X Cancel"
+                    }
+                } else if valid {
+                    "TAB Complete path   ^X Cancel   ENTER Complete"
+                } else {
+                    "TAB Complete path   ^X Cancel"
+                },
+            )
+        }
         Mode::Edit => (
             String::new(),
             if app.single_preview {
-                "ENTER Editor   Arrows Scroll   ^X Exit"
+                "ENTER Editor   ^E Export   ^X Exit"
             } else if app.opts.single {
-                "ENTER Preview   ^F Find   ^N Newline   ^X Exit"
+                "ENTER Preview   ^F Find   ^S Save   ^X Exit"
             } else {
-                "ENTER Render   ^F Find   ^N Newline   ^X Exit"
+                "ENTER Render   ^F Find   ^S Save   ^E Export   ^X Exit"
             },
         ),
     };
     frame.render_widget(Paragraph::new(field), entry);
+    if app.mode == Mode::File && entry.height > 2 {
+        let e = app.file_entry.as_mut().unwrap();
+        if let Some(text) = candidate_text(e) {
+            let area = Rect::new(entry.x, entry.y + 2, entry.width, entry.height - 2);
+            let count = Paragraph::new(text.as_str())
+                .wrap(Wrap { trim: false })
+                .line_count(area.width.max(1));
+            e.candidate_scroll = e.candidate_scroll.min(
+                count
+                    .saturating_sub(usize::from(area.height))
+                    .min(usize::from(u16::MAX)) as u16,
+            );
+            frame.render_widget(
+                Paragraph::new(text)
+                    .wrap(Wrap { trim: false })
+                    .scroll((e.candidate_scroll, 0)),
+                area,
+            );
+        }
+    }
+    if app.mode == Mode::File && entry.height >= 2 && entry.width > 15 {
+        let e = app.file_entry.as_ref().unwrap();
+        let (_, cursor) = visible_path(e, entry.width);
+        frame.set_cursor_position((entry.x + 15 + cursor, entry.y + 1));
+    }
     frame.render_widget(Paragraph::new(navigation), nav);
 }
 
@@ -527,7 +863,8 @@ pub fn run(opts: Options, source: String) -> io::Result<()> {
                 Rect::new(0, 0, size.width, size.height),
                 app.opts.single,
                 app.single_preview,
-                app.mode != Mode::Edit,
+                entry_lines(&app, Rect::new(0, 0, size.width, size.height)),
+                message_lines(&app, size.width),
             );
             // In single Editor view, use the width that the Preview will have.
             let width = if p.width == 0 {
@@ -562,6 +899,15 @@ pub fn run(opts: Options, source: String) -> io::Result<()> {
                         app.insert(&s.replace("\r\n", "\n").replace('\r', "\n"))
                     }
                     Event::Paste(s) if app.mode == Mode::Find => app.search.push_str(&s),
+                    Event::Paste(s) if app.mode == Mode::File => {
+                        let entry = app.file_entry.as_mut().unwrap();
+                        let text: Vec<char> =
+                            s.chars().filter(|c| *c != '\r' && *c != '\n').collect();
+                        let len = text.len();
+                        entry.text.splice(entry.cursor..entry.cursor, text);
+                        entry.cursor += len;
+                        entry.edited();
+                    }
                     _ => {}
                 }
             }
@@ -579,6 +925,14 @@ pub fn run(opts: Options, source: String) -> io::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    fn press(app: &mut App, code: KeyCode, modifiers: KeyModifiers) -> bool {
+        key(app, KeyEvent::new(code, modifiers), 400)
+    }
+    fn path(app: &mut App, path: &std::path::Path) {
+        let entry = app.file_entry.as_mut().unwrap();
+        entry.text = path.to_str().unwrap().chars().collect();
+        entry.cursor = entry.text.len();
+    }
     #[test]
     fn editor_handles_multiline_and_find_wraps() {
         let mut app = App::new(Options::default(), String::new());
@@ -623,5 +977,195 @@ mod tests {
             100,
         );
         assert_eq!(app.source(), "x");
+    }
+
+    #[test]
+    fn save_and_exit_updates_dirty_baseline() {
+        let dir = std::env::temp_dir().join(format!("rateq-ui-save-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let dest = dir.join("source.txt");
+        let mut app = App::new(Options::default(), String::new());
+        app.insert("x+1");
+        assert!(!press(&mut app, KeyCode::Char('s'), KeyModifiers::CONTROL));
+        path(&mut app, &dest);
+        assert!(!press(&mut app, KeyCode::Enter, KeyModifiers::NONE));
+        assert_eq!(std::fs::read_to_string(&dest).unwrap(), "x+1");
+        assert_eq!(app.initial, "x+1");
+        app.insert("+2");
+        press(&mut app, KeyCode::Char('x'), KeyModifiers::CONTROL);
+        press(&mut app, KeyCode::Char('y'), KeyModifiers::NONE);
+        assert!(app.file_entry.as_ref().unwrap().from_exit);
+        assert!(press(&mut app, KeyCode::Enter, KeyModifiers::NONE));
+        assert_eq!(std::fs::read_to_string(&dest).unwrap(), "x+1+2");
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn exports_retained_source_and_blocks_unrendered_export() {
+        let dir = std::env::temp_dir().join(format!("rateq-ui-export-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut app = App::new(Options::default(), "current".into());
+        press(&mut app, KeyCode::Char('e'), KeyModifiers::CONTROL);
+        assert!(app.export_warning().unwrap().contains("E301"));
+        press(&mut app, KeyCode::Char('p'), KeyModifiers::NONE);
+        assert!(app.mode == Mode::Export);
+        app.retained = Some(r"\frac{1}{2}".into());
+        assert!(app.export_warning().unwrap().contains("W205"));
+        press(&mut app, KeyCode::Char('p'), KeyModifiers::NONE);
+        let png = dir.join("old.png");
+        path(&mut app, &png);
+        press(&mut app, KeyCode::Enter, KeyModifiers::NONE);
+        assert_eq!(
+            std::fs::read(&png).unwrap(),
+            render::export_png(r"\frac{1}{2}").unwrap()
+        );
+        press(&mut app, KeyCode::Char('e'), KeyModifiers::CONTROL);
+        press(&mut app, KeyCode::Char('s'), KeyModifiers::NONE);
+        let svg = dir.join("old.svg");
+        path(&mut app, &svg);
+        press(&mut app, KeyCode::Enter, KeyModifiers::NONE);
+        let svg = std::fs::read_to_string(&svg).unwrap();
+        assert!(svg.contains("<svg"));
+        assert!(svg.contains("<path"));
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn simultaneous_export_warnings_remain_visible() {
+        let dir = std::env::temp_dir().join(format!("rateq warnings {}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let output = dir.join("other.png");
+        std::fs::write(&output, b"existing").unwrap();
+        let mut app = App::new(Options::default(), "new".into());
+        app.files = Files::new(dir.clone(), Some("original.txt".into()));
+        app.retained = Some("old".into());
+        app.open_file(FileType::Png, false);
+        path(&mut app, &output);
+        for width in [40, 60, 80] {
+            let mut terminal =
+                ratatui::Terminal::new(ratatui::backend::TestBackend::new(width, 30)).unwrap();
+            terminal
+                .draw(|frame| draw(frame, &mut app, &Picker::halfblocks()))
+                .unwrap();
+            let buffer = terminal.backend().buffer();
+            let screen: String = (0..buffer.area.height)
+                .map(|y| {
+                    (0..buffer.area.width)
+                        .map(|x| buffer[(x, y)].symbol())
+                        .collect::<String>()
+                })
+                .collect::<Vec<_>>()
+                .join("\n");
+            for warning in ["W201", "W202", "W203", "W205"] {
+                assert!(
+                    screen.contains(warning),
+                    "{warning} missing at width {width}:\n{screen}"
+                );
+            }
+            let normalized = screen.split_whitespace().collect::<Vec<_>>().join(" ");
+            assert!(
+                normalized.contains("predates a failed render"),
+                "W205 was clipped at width {width}:\n{screen}"
+            );
+        }
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn file_entry_updates_diagnostics_while_typing() {
+        let dir = std::env::temp_dir().join(format!("rateq-ui-entry-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let launch = dir.join("original.txt");
+        std::fs::write(&launch, "original").unwrap();
+        let mut app = App::new(
+            Options {
+                file: Some(launch),
+                ..Options::default()
+            },
+            "original".into(),
+        );
+        press(&mut app, KeyCode::Char('s'), KeyModifiers::CONTROL);
+        assert!(interaction_message(&app).contains("W201"));
+        press(&mut app, KeyCode::Char('u'), KeyModifiers::CONTROL);
+        assert!(interaction_message(&app).contains("E203"));
+        assert!(!press(&mut app, KeyCode::Enter, KeyModifiers::NONE));
+        assert!(app.mode == Mode::File);
+        let changed = dir.join("renamed source.txt");
+        for c in changed.to_str().unwrap().chars() {
+            press(&mut app, KeyCode::Char(c), KeyModifiers::NONE);
+        }
+        let message = interaction_message(&app);
+        assert!(message.contains("W202"));
+        assert!(message.contains("W203"));
+        let mut terminal =
+            ratatui::Terminal::new(ratatui::backend::TestBackend::new(60, 24)).unwrap();
+        terminal
+            .draw(|frame| draw(frame, &mut app, &Picker::halfblocks()))
+            .unwrap();
+        let buffer = terminal.backend().buffer();
+        let screen = (0..buffer.area.height)
+            .map(|y| {
+                (0..buffer.area.width)
+                    .map(|x| buffer[(x, y)].symbol())
+                    .collect::<String>()
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(screen.contains("W202"));
+        assert!(screen.contains("W203"));
+        assert!(!changed.exists());
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn completion_candidates_can_be_read_and_scrolled() {
+        let dir = std::env::temp_dir().join(format!("rateq-ui-completion-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        for i in 0..12 {
+            std::fs::write(dir.join(format!("alpha-{i:02}.txt")), "").unwrap();
+        }
+        let mut app = App::new(Options::default(), String::new());
+        app.files = Files::new(dir.clone(), None);
+        app.open_file(FileType::Source, false);
+        path(&mut app, &dir.join("alpha-"));
+        press(&mut app, KeyCode::Tab, KeyModifiers::NONE);
+        press(&mut app, KeyCode::Tab, KeyModifiers::NONE);
+        assert_eq!(
+            app.file_entry
+                .as_ref()
+                .unwrap()
+                .candidates
+                .as_ref()
+                .unwrap()
+                .len(),
+            12
+        );
+        let mut terminal =
+            ratatui::Terminal::new(ratatui::backend::TestBackend::new(50, 24)).unwrap();
+        terminal
+            .draw(|frame| draw(frame, &mut app, &Picker::halfblocks()))
+            .unwrap();
+        let screen = |terminal: &ratatui::Terminal<ratatui::backend::TestBackend>| {
+            let buffer = terminal.backend().buffer();
+            (0..buffer.area.height)
+                .map(|y| {
+                    (0..buffer.area.width)
+                        .map(|x| buffer[(x, y)].symbol())
+                        .collect::<String>()
+                })
+                .collect::<Vec<_>>()
+                .join("\n")
+        };
+        assert!(screen(&terminal).contains("alpha-00.txt"));
+        for _ in 0..20 {
+            press(&mut app, KeyCode::Down, KeyModifiers::NONE);
+        }
+        terminal
+            .draw(|frame| draw(frame, &mut app, &Picker::halfblocks()))
+            .unwrap();
+        assert!(screen(&terminal).contains("alpha-11.txt"));
+        press(&mut app, KeyCode::Char('x'), KeyModifiers::CONTROL);
+        assert!(app.mode == Mode::Edit);
+        std::fs::remove_dir_all(dir).unwrap();
     }
 }

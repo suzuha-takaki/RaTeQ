@@ -5,6 +5,7 @@ use ratex_parser::{
     parser::parse,
 };
 use ratex_render::{render_to_png, RenderOptions};
+use ratex_svg::{render_to_svg, SvgOptions};
 use ratex_types::color::Color;
 
 // Break only at top-level binary plus signs, preserving nested groups and explicit breaks.
@@ -34,6 +35,10 @@ fn nodes(source: &str, width: Option<u32>) -> Result<Vec<ParseNode>, String> {
 }
 
 pub fn png(source: &str, width: Option<u32>) -> Result<Vec<u8>, String> {
+    png_at_scale(source, width, 1.0)
+}
+
+fn png_at_scale(source: &str, width: Option<u32>, scale: f32) -> Result<Vec<u8>, String> {
     let tree = layout(
         &nodes(source, width)?,
         &LayoutOptions::default().with_color(Color::BLACK),
@@ -46,9 +51,31 @@ pub fn png(source: &str, width: Option<u32>) -> Result<Vec<u8>, String> {
             padding: 8.0,
             background_color: Color::new(0.0, 0.0, 0.0, 0.0),
             font_dir: String::new(),
-            device_pixel_ratio: 1.0,
+            device_pixel_ratio: scale,
         },
     )
+}
+
+pub fn export_png(source: &str) -> Result<Vec<u8>, String> {
+    png_at_scale(source, None, 2.0)
+}
+
+pub fn export_svg(source: &str) -> Result<Vec<u8>, String> {
+    let tree = layout(
+        &nodes(source, None)?,
+        &LayoutOptions::default().with_color(Color::BLACK),
+    );
+    validate_layout(&tree)?;
+    Ok(render_to_svg(
+        &to_display_list(&tree),
+        &SvgOptions {
+            font_size: 32.0,
+            padding: 8.0,
+            embed_glyphs: true,
+            ..Default::default()
+        },
+    )
+    .into_bytes())
 }
 
 pub fn white_image(png: &[u8]) -> Result<DynamicImage, String> {
