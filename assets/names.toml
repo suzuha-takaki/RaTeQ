@@ -1,0 +1,30 @@
+# Word lists for generating suggested filenames.
+first = [
+  "amber",
+  "brisk",
+  "calm",
+  "curious",
+  "daring",
+  "gentle",
+  "lunar",
+  "mellow",
+  "quiet",
+  "silver",
+  "sunny",
+  "velvet",
+]
+
+second = [
+  "comet",
+  "falcon",
+  "fern",
+  "fox",
+  "heron",
+  "island",
+  "lantern",
+  "otter",
+  "panda",
+  "river",
+  "sparrow",
+  "willow",
+]
