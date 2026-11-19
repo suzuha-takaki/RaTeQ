@@ -146,9 +146,10 @@ Single-window mode starts in the Editor window.
 - In double-window mode, place Editor above Preview. Initially give the windows equal heights after reserving space for the bars.
 - Keep this vertical arrangement in narrow terminals.
 - In single-window mode, the active Editor or Preview window uses the available window area.
-- Keep Entry bar, Navigation bar, and message access visible when the terminal is small.
-- Show [W403](messages.md#w403) when the Editor/Preview area cannot fit.
-- The minimum dimensions and below-minimum behavior are open decisions; see [Design](DESIGN.md#product-decisions).
+- The minimum terminal size is **80 columns by 24 rows**.
+- At or above the minimum, keep Entry bar, Navigation bar, and message access visible, including in narrow terminals.
+- Below either minimum dimension, show a full-screen resize message with [W403](messages.md#w403), the required size, and the current size. Ignore keyboard and paste input until the terminal is large enough, and preserve the current interaction and in-progress input.
+- Return to the previous interaction when both dimensions meet the minimum.
 
 ## Preview Flow
 

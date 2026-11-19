@@ -27,7 +27,7 @@
 | <a id="w205"></a>W205 | `WARNING: Exporting the displayed preview, which differs from the current source or predates a failed render` | [Older-preview export](interactions.md#export) |
 | <a id="w401"></a>W401 | `In-terminal preview unavailable` followed by `Your terminal does not appear to support a preview method used by rateq.` and `Contributions are welcome!` | [Missing terminal graphics](README.md#graphics) |
 | <a id="w402"></a>W402 | Identify the unavailable feature, explain the apparently unsupported capability, and state `Contributions are welcome!` | [Other unavailable terminal features](README.md#feature-availability) |
-| <a id="w403"></a>W403 | `WARNING: Terminal too small to show the Editor/Preview area. Please resize.` | [Small-terminal layout](session.md#layout) |
+| <a id="w403"></a>W403 | `WARNING: Terminal too small. Please resize.` | [Small-terminal layout](session.md#layout) |
 | <a id="w501"></a>W501 | `WARNING: Answering "No" will destroy changes made` | [Exit with unsaved changes](interactions.md#exit) |
 
 ## Errors

@@ -4,9 +4,7 @@ Open product decisions are listed below. Final decisions live in the official do
 
 ## Product Decisions
 
-| Decision | Status | Details |
-|---|---|---|
-| Minimum terminal size | Open | Determine the minimum columns and rows, and specify behavior below that size, accounting for the windows, entry and navigation bars, and access to complete messages and warnings in each interaction. See [Layout](session.md#layout). |
+All current product decisions are resolved.
 
 ## Decision Log
 
@@ -48,3 +46,4 @@ Open product decisions are listed below. Final decisions live in the official do
 | 2026-11-19 | Multiline paste | Adopted | Insert pasted newlines as source text, then follow normal manual/live rendering behavior | [Input](editing.md#input) |
 | 2026-11-19 | Shift+Enter shortcuts | Removed | The development terminal does not distinguish Shift+Enter from Enter. Use Ctrl+N for a newline and Enter to cycle forward through Find matches. | [Input](editing.md#input), [Find](editing.md#find) |
 | 2026-11-19 | Support location | Adopted | Keep support information in the main README and release planning in ROADMAP | [Support](README.md#support), [Roadmap](ROADMAP.md) |
+| 2026-11-19 | Minimum terminal size | Adopted | Use 80 columns by 24 rows. Below either dimension, show a resize screen until the terminal is large enough, preserving the interaction. | [Layout](session.md#layout), [W403](messages.md#w403) |
