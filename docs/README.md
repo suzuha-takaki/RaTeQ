@@ -84,9 +84,11 @@ Check versions when preparing a release and report which OS/CPU, terminal versio
 
 ### Graphics
 
-Use ratatui-image's detected graphics protocol and its built-in halfblocks fallback.
+At each interactive launch, use ratatui-image to detect terminal graphics. When Kitty graphics is selected, also query whether the terminal confirms support for the Unicode image placeholders RaTeQ uses. A missing or older response does not prove the feature is unsupported. For WezTerm, if Kitty placeholder support cannot be confirmed, use its iTerm2-compatible image protocol instead; this applies on any operating system.
 
-Show [W401](messages.md#w401) if Preview display is unavailable. Keep source editing/saving and export available. A retained rendered result can exist without terminal display. See [Export](interactions.md#export).
+If detection fails, selects halfblocks, or cannot confirm Kitty placeholder support and no compatible alternative is known, show [W401](messages.md#w401) before editing and retain the detected preview method, including ratatui-image's halfblocks fallback when selected. The warning includes a scrollable, copyable issue-report template with the RaTeQ version, available OS and terminal details, detected and selected graphics protocols, the check result, and the `TERM`, `TERM_PROGRAM`, `TERM_PROGRAM_VERSION`, and `COLORTERM` variables. Mark unavailable information accordingly. Enter continues; Up/Down scroll. Include no other environment variables in the report and do not submit it automatically.
+
+Keep source editing/saving and export available when Preview display is unavailable. A retained rendered result can exist without terminal display. See [Export](interactions.md#export).
 
 ### Feature Availability
 

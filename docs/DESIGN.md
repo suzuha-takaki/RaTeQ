@@ -39,3 +39,5 @@ All current product decisions are resolved.
 | 2026-11-19 | Removed | Remove Shift+Enter shortcuts because the development terminal cannot distinguish them from Enter; use Ctrl+N for newlines and cycle forward through Find matches with Enter. | [Input](editing.md#input), [Find](editing.md#find) |
 | 2026-11-19 | Adopted | Require 80 columns by 24 rows; below either minimum, show a resize screen while preserving the interaction. | [Layout](session.md#layout), [W403](messages.md#w403) |
 | 2026-11-19 | Adopted | Ask for persistence approval only when Resume is requested without an approved location; allow continuing without persistence and require no new CLI option. | [Persistence](session.md#persistence), [Resume](session.md#resume) |
+| 2026-11-19 | Adopted | Check terminal graphics at launch, warn when support cannot be confirmed, and provide a copyable issue template with available diagnostics. | [Graphics](README.md#graphics), [Messages](messages.md#w401) |
+| 2026-11-19 | Adopted | When WezTerm does not confirm Kitty image placeholders, select its iTerm2-compatible protocol for the preview. | [Graphics](README.md#graphics) |
