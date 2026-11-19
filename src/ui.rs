@@ -82,6 +82,10 @@ enum Mode {
     Export,
     File,
 }
+struct Help {
+    scroll: u16,
+    page_height: u16,
+}
 struct FileEntry {
     kind: FileType,
     text: Vec<char>,
@@ -113,10 +117,13 @@ struct App {
     retained: Option<String>,
     render_width: Option<u32>,
     job: Option<Job>,
+    reflow_job: Option<Job>,
+    failed_reflow_width: Option<u32>,
     deadline: Option<Instant>,
     failed: bool,
     diagnostic: String,
     mode: Mode,
+    help: Option<Help>,
     files: Files,
     file_entry: Option<FileEntry>,
     search: String,
@@ -141,10 +148,13 @@ impl App {
             retained: None,
             render_width: None,
             job: None,
+            reflow_job: None,
+            failed_reflow_width: None,
             deadline: None,
             failed: false,
             diagnostic: String::new(),
             mode: Mode::Edit,
+            help: None,
             files,
             file_entry: None,
             search: String::new(),
@@ -171,6 +181,9 @@ impl App {
     }
     fn start(&mut self, width: u32) {
         if let Some(job) = self.job.take() {
+            job.cancel();
+        }
+        if let Some(job) = self.reflow_job.take() {
             job.cancel();
         }
         self.deadline = None;
@@ -204,9 +217,13 @@ impl App {
             if status.success() {
                 match render::white_image(&out) {
                     Ok(image) => {
+                        if let Some(job) = self.reflow_job.take() {
+                            job.cancel();
+                        }
                         self.preview = Some(image);
                         self.retained = Some(job.source);
                         self.render_width = job.width;
+                        self.failed_reflow_width = None;
                         self.x = 0;
                         self.y = 0;
                         self.failed = false;
@@ -220,6 +237,69 @@ impl App {
                 self.failed = true;
                 self.diagnostic = String::from_utf8_lossy(&err).trim().to_owned();
             }
+        }
+    }
+
+    fn apply_reflow(&mut self, source: &str, width: u32, current_width: u32, image: DynamicImage) {
+        if width == current_width && self.retained.as_deref() == Some(source) {
+            self.preview = Some(image);
+            self.render_width = Some(width);
+            self.failed_reflow_width = None;
+        }
+    }
+
+    fn finish_reflow(&mut self, current_width: u32) {
+        let done = match self.reflow_job.as_mut().map(|job| job.child.try_wait()) {
+            Some(Ok(Some(status))) => Some(status),
+            Some(Err(_)) => {
+                if let Some(job) = self.reflow_job.take() {
+                    self.failed_reflow_width = job.width;
+                    job.cancel();
+                }
+                None
+            }
+            _ => None,
+        };
+        if let Some(status) = done {
+            let job = self.reflow_job.take().unwrap();
+            let output = job.out.join().ok().and_then(Result::ok).unwrap_or_default();
+            let _ = job.err.join();
+            if let Some(width) = job.width {
+                if status.success() {
+                    match render::white_image(&output) {
+                        Ok(image) => self.apply_reflow(&job.source, width, current_width, image),
+                        Err(_) => self.failed_reflow_width = Some(width),
+                    }
+                } else {
+                    self.failed_reflow_width = Some(width);
+                }
+            }
+        }
+    }
+
+    fn schedule_reflow(&mut self, width: u32) {
+        if !self.opts.breaking || self.job.is_some() || self.deadline.is_some() {
+            return;
+        }
+        if self
+            .reflow_job
+            .as_ref()
+            .is_some_and(|job| job.width != Some(width))
+        {
+            self.reflow_job.take().unwrap().cancel();
+        }
+        let Some(source) = self.retained.as_ref() else {
+            return;
+        };
+        if self.render_width == Some(width)
+            || self.failed_reflow_width == Some(width)
+            || self.reflow_job.is_some()
+        {
+            return;
+        }
+        match Job::start(source.clone(), Some(width)) {
+            Ok(job) => self.reflow_job = Some(job),
+            Err(_) => self.failed_reflow_width = Some(width),
         }
     }
     fn status(&self) -> &'static str {
@@ -272,7 +352,7 @@ impl App {
             self.cursor = (starts[t] + col).min(end);
         }
     }
-    fn find(&mut self, backwards: bool) {
+    fn find_next(&mut self) {
         if self.search.is_empty() {
             self.message.clear();
             return;
@@ -288,20 +368,11 @@ impl App {
             self.message = "No matches".into();
             return;
         }
-        self.cursor = if backwards {
-            matches
-                .iter()
-                .rev()
-                .find(|&&i| i < self.cursor)
-                .copied()
-                .unwrap_or(*matches.last().unwrap())
-        } else {
-            matches
-                .iter()
-                .find(|&&i| i > self.cursor)
-                .copied()
-                .unwrap_or(matches[0])
-        };
+        self.cursor = matches
+            .iter()
+            .find(|&&i| i > self.cursor)
+            .copied()
+            .unwrap_or(matches[0]);
         self.message.clear();
     }
 
@@ -379,6 +450,24 @@ fn key(app: &mut App, key: KeyEvent, width: u32) -> bool {
         return false;
     }
     let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
+    if let Some(help) = app.help.as_mut() {
+        match key.code {
+            KeyCode::Char('x') if ctrl => app.help = None,
+            KeyCode::Up => help.scroll = help.scroll.saturating_sub(1),
+            KeyCode::Down => help.scroll = help.scroll.saturating_add(1),
+            KeyCode::PageUp => help.scroll = help.scroll.saturating_sub(help.page_height.max(1)),
+            KeyCode::PageDown => help.scroll = help.scroll.saturating_add(help.page_height.max(1)),
+            _ => {}
+        }
+        return false;
+    }
+    if key.code == KeyCode::Char('g') && ctrl {
+        app.help = Some(Help {
+            scroll: 0,
+            page_height: 1,
+        });
+        return false;
+    }
     if app.mode == Mode::File {
         if key.code == KeyCode::Char('x') && ctrl {
             let from_exit = app.file_entry.take().unwrap().from_exit;
@@ -479,7 +568,7 @@ fn key(app: &mut App, key: KeyEvent, width: u32) -> bool {
                 app.mode = Mode::Edit;
                 app.message.clear();
             }
-            KeyCode::Enter => app.find(key.modifiers.contains(KeyModifiers::SHIFT)),
+            KeyCode::Enter => app.find_next(),
             KeyCode::Backspace => {
                 app.search.pop();
                 app.message.clear();
@@ -510,9 +599,6 @@ fn key(app: &mut App, key: KeyEvent, width: u32) -> bool {
             app.message.clear();
         }
         KeyCode::Char('n') if ctrl && !app.single_preview => app.insert("\n"),
-        KeyCode::Enter if key.modifiers.contains(KeyModifiers::SHIFT) && !app.single_preview => {
-            app.insert("\n")
-        }
         KeyCode::Enter if app.single_preview => app.single_preview = false,
         KeyCode::Enter => {
             app.start(width);
@@ -682,7 +768,126 @@ fn visible_path(entry: &FileEntry, width: u16) -> (String, u16) {
     }
     (shown, before as u16)
 }
+
+fn help_text(app: &App) -> String {
+    let mut lines = vec!["Contextual shortcuts", ""];
+    match app.mode {
+        Mode::Edit if app.single_preview => {
+            lines.extend([
+                "Preview",
+                "Enter          Return to the editor",
+                "Arrow keys     Scroll the preview",
+                "Page Up/Down   Scroll the preview vertically",
+                "Ctrl+Home/End  Scroll the preview horizontally",
+                "Ctrl+E         Export the retained result",
+                "Ctrl+X         Exit",
+            ]);
+        }
+        Mode::Edit => {
+            lines.extend([
+                "Editor",
+                "Arrow keys     Move the cursor",
+                "Ctrl+N         Insert a newline",
+                "Tab            Insert a space",
+                "Backspace/Del  Delete text",
+            ]);
+            lines.push(if app.opts.single {
+                "Enter          Render and show the preview"
+            } else {
+                "Enter          Render the current source"
+            });
+            lines.extend(["Ctrl+F         Find text", "Ctrl+S         Save the source"]);
+            if !app.opts.single {
+                lines.extend([
+                    "Ctrl+E         Export the retained result",
+                    "Page Up/Down   Scroll the preview vertically",
+                    "Ctrl+Home/End  Scroll the preview horizontally",
+                ]);
+            }
+            lines.extend([
+                "Ctrl+X         Exit",
+                "",
+                "Paste can include multiple lines.",
+            ]);
+        }
+        Mode::Find => lines.extend([
+            "Find",
+            "Enter          Find the next match, wrapping at the end",
+            "Backspace      Delete the last search character",
+            "Ctrl+X         Close Find",
+        ]),
+        Mode::File => lines.extend([
+            "File entry",
+            "Tab            Complete the path; press again to list matches",
+            "Up/Down        Scroll completion matches",
+            "Left/Right     Move within the path",
+            "Home/End       Move to the beginning/end of the path",
+            "Backspace/Del  Delete path text",
+            "Ctrl+U         Clear the path",
+            "Enter          Accept warnings and write the file when valid",
+            "Ctrl+X         Cancel",
+        ]),
+        Mode::Export => {
+            lines.extend([
+                "Export",
+                "P              Choose PNG",
+                "S              Choose SVG",
+                "Ctrl+X         Cancel",
+            ]);
+            if app.retained.is_none() {
+                lines.extend(["", "Render a preview before exporting."]);
+            }
+        }
+        Mode::Exit => lines.extend([
+            "Exit",
+            "Y              Save the source and exit",
+            "N              Discard changes and exit",
+            "Ctrl+X         Cancel",
+        ]),
+    }
+    lines.extend(["", "Ctrl+G         Open Help"]);
+    lines.join("\n")
+}
+
+fn draw_help(frame: &mut ratatui::Frame, app: &mut App) {
+    let text = help_text(app);
+    let [title, content, nav] = Layout::vertical([
+        Constraint::Length(1),
+        Constraint::Min(0),
+        Constraint::Length(1),
+    ])
+    .areas(frame.area());
+    let line_count = Paragraph::new(text.as_str())
+        .wrap(Wrap { trim: false })
+        .line_count(content.width.max(1));
+    let help = app.help.as_mut().unwrap();
+    help.page_height = content.height.max(1);
+    help.scroll = help.scroll.min(
+        line_count
+            .saturating_sub(usize::from(content.height))
+            .min(usize::from(u16::MAX)) as u16,
+    );
+    frame.render_widget(
+        Paragraph::new("Help").style(Style::default().fg(Color::Cyan)),
+        title,
+    );
+    frame.render_widget(
+        Paragraph::new(text)
+            .wrap(Wrap { trim: false })
+            .scroll((help.scroll, 0)),
+        content,
+    );
+    frame.render_widget(
+        Paragraph::new("^G Get Help   ↑↓ Scroll   PgUp/PgDn Page   ^X Return"),
+        nav,
+    );
+}
+
 fn draw(frame: &mut ratatui::Frame, app: &mut App, picker: &Picker) {
+    if app.help.is_some() {
+        draw_help(frame, app);
+        return;
+    }
     let (editor, preview, latex, message, entry, nav) = areas(
         frame.area(),
         app.opts.single,
@@ -771,8 +976,7 @@ fn draw(frame: &mut ratatui::Frame, app: &mut App, picker: &Picker) {
     }
     frame.render_widget(Paragraph::new(format!("LaTeX: {}", app.diagnostic)), latex);
     let msg = if too_small && app.mode == Mode::Edit {
-        "W403 WARNING: Terminal too small to show the Editor/Preview area. Please resize."
-            .to_owned()
+        "W403 WARNING: Terminal too small. Please resize.".to_owned()
     } else {
         interaction_message(app)
     };
@@ -783,9 +987,18 @@ fn draw(frame: &mut ratatui::Frame, app: &mut App, picker: &Picker) {
         message,
     );
     let (field, navigation) = match app.mode {
-        Mode::Find => (format!("Search: {}", app.search), "ENTER Next   ^X Close"),
-        Mode::Exit => ("Save modified buffer?  Y Yes   N No".into(), "^X Cancel"),
-        Mode::Export => ("Export preview as?  P png   S svg".into(), "^X Cancel"),
+        Mode::Find => (
+            format!("Search: {}", app.search),
+            "^G Get Help   ^X Close   ENTER Next",
+        ),
+        Mode::Exit => (
+            "Save modified buffer?  Y Yes   N No".into(),
+            "^G Get Help   ^X Cancel",
+        ),
+        Mode::Export => (
+            "Export preview as?  P png   S svg".into(),
+            "^G Get Help   ^X Cancel",
+        ),
         Mode::File => {
             let e = app.file_entry.as_ref().unwrap();
             let valid = app.files.validate(&e.path(), e.kind).is_ok();
@@ -794,25 +1007,25 @@ fn draw(frame: &mut ratatui::Frame, app: &mut App, picker: &Picker) {
                 format!("File Type: {}\nFile to write: {}", e.kind.label(), path),
                 if e.candidates.as_ref().is_some_and(|c| !c.is_empty()) && entry.height > 2 {
                     if valid {
-                        "↑↓ Matches   TAB Complete   ^X Cancel   ENTER Complete"
+                        "^G Get Help   ↑↓ Matches   TAB Complete   ^X Cancel   ENTER Complete"
                     } else {
-                        "↑↓ Matches   TAB Complete   ^X Cancel"
+                        "^G Get Help   ↑↓ Matches   TAB Complete   ^X Cancel"
                     }
                 } else if valid {
-                    "TAB Complete path   ^X Cancel   ENTER Complete"
+                    "^G Get Help   TAB Complete path   ^X Cancel   ENTER Complete"
                 } else {
-                    "TAB Complete path   ^X Cancel"
+                    "^G Get Help   TAB Complete path   ^X Cancel"
                 },
             )
         }
         Mode::Edit => (
             String::new(),
             if app.single_preview {
-                "ENTER Editor   ^E Export   ^X Exit"
+                "^G Get Help   ENTER Editor   ^E Export   ^X Exit"
             } else if app.opts.single {
-                "ENTER Preview   ^F Find   ^S Save   ^X Exit"
+                "^G Get Help   ENTER Preview   ^F Find   ^S Save   ^X Exit"
             } else {
-                "ENTER Render   ^F Find   ^S Save   ^E Export   ^X Exit"
+                "^G Get Help   ENTER Render   ^F Find   ^S Save   ^E Export   ^X Exit"
             },
         ),
     };
@@ -845,6 +1058,54 @@ fn draw(frame: &mut ratatui::Frame, app: &mut App, picker: &Picker) {
     frame.render_widget(Paragraph::new(navigation), nav);
 }
 
+const MIN_COLUMNS: u16 = 80;
+const MIN_ROWS: u16 = 24;
+
+fn below_minimum(width: u16, height: u16) -> bool {
+    width < MIN_COLUMNS || height < MIN_ROWS
+}
+
+fn draw_resize(frame: &mut ratatui::Frame) {
+    let area = frame.area();
+    let text = format!(
+        "W403 WARNING: Terminal too small. Please resize.\nMinimum: {MIN_COLUMNS} columns and {MIN_ROWS} rows.\nCurrent size: {} columns and {} rows.",
+        area.width, area.height
+    );
+    frame.render_widget(
+        Paragraph::new(text)
+            .wrap(Wrap { trim: false })
+            .style(Style::default().fg(Color::Yellow)),
+        area,
+    );
+}
+
+fn handle_event(app: &mut App, event: Event, width: u32, too_small: bool) -> bool {
+    if too_small {
+        return false;
+    }
+    match event {
+        Event::Key(k) => key(app, k, width),
+        Event::Paste(s) if app.help.is_none() && app.mode == Mode::Edit && !app.single_preview => {
+            app.insert(&s.replace("\r\n", "\n").replace('\r', "\n"));
+            false
+        }
+        Event::Paste(s) if app.help.is_none() && app.mode == Mode::Find => {
+            app.search.push_str(&s);
+            false
+        }
+        Event::Paste(s) if app.help.is_none() && app.mode == Mode::File => {
+            let entry = app.file_entry.as_mut().unwrap();
+            let text: Vec<char> = s.chars().filter(|c| *c != '\r' && *c != '\n').collect();
+            let len = text.len();
+            entry.text.splice(entry.cursor..entry.cursor, text);
+            entry.cursor += len;
+            entry.edited();
+            false
+        }
+        _ => false,
+    }
+}
+
 pub fn run(opts: Options, source: String) -> io::Result<()> {
     let picker = Picker::from_query_stdio().unwrap_or_else(|_| Picker::halfblocks());
     let mut terminal = ratatui::try_init()?;
@@ -859,6 +1120,15 @@ pub fn run(opts: Options, source: String) -> io::Result<()> {
     let result = (|| -> io::Result<()> {
         loop {
             let size = terminal.size()?;
+            let too_small = below_minimum(size.width, size.height);
+            if too_small {
+                app.finish();
+                terminal.draw(draw_resize)?;
+                if event::poll(Duration::from_millis(30))? {
+                    handle_event(&mut app, event::read()?, 0, true);
+                }
+                continue;
+            }
             let (_, p, _, _, _, _) = areas(
                 Rect::new(0, 0, size.width, size.height),
                 app.opts.single,
@@ -874,47 +1144,24 @@ pub fn run(opts: Options, source: String) -> io::Result<()> {
                 preview_width(p, &picker)
             };
             app.finish();
+            app.finish_reflow(width);
             if app.deadline.is_some_and(|d| Instant::now() >= d) {
                 app.start(width);
             }
-            // Reflow a current retained result on resize; do not render an edited source in manual mode.
-            if app.opts.breaking
-                && app.job.is_none()
-                && app.deadline.is_none()
-                && !app.failed
-                && app.retained.as_ref().is_some_and(|s| *s == app.source())
-                && app.render_width != Some(width)
-            {
-                app.start(width);
-            }
+            app.schedule_reflow(width);
             terminal.draw(|f| draw(f, &mut app, &picker))?;
-            if event::poll(Duration::from_millis(30))? {
-                match event::read()? {
-                    Event::Key(k) => {
-                        if key(&mut app, k, width) {
-                            break;
-                        }
-                    }
-                    Event::Paste(s) if app.mode == Mode::Edit && !app.single_preview => {
-                        app.insert(&s.replace("\r\n", "\n").replace('\r', "\n"))
-                    }
-                    Event::Paste(s) if app.mode == Mode::Find => app.search.push_str(&s),
-                    Event::Paste(s) if app.mode == Mode::File => {
-                        let entry = app.file_entry.as_mut().unwrap();
-                        let text: Vec<char> =
-                            s.chars().filter(|c| *c != '\r' && *c != '\n').collect();
-                        let len = text.len();
-                        entry.text.splice(entry.cursor..entry.cursor, text);
-                        entry.cursor += len;
-                        entry.edited();
-                    }
-                    _ => {}
-                }
+            if event::poll(Duration::from_millis(30))?
+                && handle_event(&mut app, event::read()?, width, false)
+            {
+                break;
             }
         }
         Ok(())
     })();
     if let Some(job) = app.job.take() {
+        job.cancel();
+    }
+    if let Some(job) = app.reflow_job.take() {
         job.cancel();
     }
     let _ = execute!(io::stdout(), DisableBracketedPaste);
@@ -934,18 +1181,113 @@ mod tests {
         entry.cursor = entry.text.len();
     }
     #[test]
+    fn help_returns_to_exact_file_entry_and_ignores_paste() {
+        let mut app = App::new(Options::default(), "original".into());
+        app.cursor = 3;
+        app.open_file(FileType::Source, true);
+        let entry = app.file_entry.as_mut().unwrap();
+        entry.text = "partially typed.txt".chars().collect();
+        entry.cursor = 4;
+        entry.candidates = Some(vec!["partial-one.txt".into(), "partial-two.txt".into()]);
+        entry.candidate_scroll = 1;
+        press(&mut app, KeyCode::Char('g'), KeyModifiers::CONTROL);
+        assert!(app.help.is_some());
+        assert!(help_text(&app).contains("File entry"));
+        assert!(!handle_event(
+            &mut app,
+            Event::Paste("unexpected".into()),
+            400,
+            false
+        ));
+        press(&mut app, KeyCode::Char('x'), KeyModifiers::CONTROL);
+        assert!(app.help.is_none());
+        assert!(app.mode == Mode::File);
+        let entry = app.file_entry.as_ref().unwrap();
+        assert!(entry.from_exit);
+        assert_eq!(entry.path(), "partially typed.txt");
+        assert_eq!(entry.cursor, 4);
+        assert_eq!(entry.candidate_scroll, 1);
+        assert_eq!(app.cursor, 3);
+        assert_eq!(app.source(), "original");
+    }
+
+    #[test]
+    fn help_is_contextual_and_scrollable() {
+        let mut app = App::new(
+            Options {
+                single: true,
+                ..Options::default()
+            },
+            "x".into(),
+        );
+        app.single_preview = true;
+        press(&mut app, KeyCode::Char('g'), KeyModifiers::CONTROL);
+        let text = help_text(&app);
+        assert!(text.contains("Preview"));
+        assert!(text.contains("Ctrl+E"));
+        assert!(!text.contains("Ctrl+F"));
+        assert!(!text.contains("Ctrl+S"));
+        let mut terminal =
+            ratatui::Terminal::new(ratatui::backend::TestBackend::new(80, 5)).unwrap();
+        terminal
+            .draw(|frame| draw(frame, &mut app, &Picker::halfblocks()))
+            .unwrap();
+        press(&mut app, KeyCode::PageDown, KeyModifiers::NONE);
+        terminal
+            .draw(|frame| draw(frame, &mut app, &Picker::halfblocks()))
+            .unwrap();
+        assert!(app.help.as_ref().unwrap().scroll > 0);
+        press(&mut app, KeyCode::Char('x'), KeyModifiers::CONTROL);
+        assert!(app.single_preview);
+        assert!(app.help.is_none());
+    }
+
+    #[test]
+    fn resize_screen_preserves_interaction_and_ignores_input() {
+        assert!(below_minimum(79, 24));
+        assert!(below_minimum(80, 23));
+        assert!(!below_minimum(80, 24));
+        let mut app = App::new(Options::default(), String::new());
+        app.open_file(FileType::Source, false);
+        let path = app.file_entry.as_ref().unwrap().path();
+        let event = Event::Key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        assert!(!handle_event(&mut app, event, 0, true));
+        assert!(!handle_event(
+            &mut app,
+            Event::Paste("lost".into()),
+            0,
+            true
+        ));
+        assert!(app.mode == Mode::File);
+        assert_eq!(app.file_entry.as_ref().unwrap().path(), path);
+        let mut terminal =
+            ratatui::Terminal::new(ratatui::backend::TestBackend::new(79, 24)).unwrap();
+        terminal.draw(draw_resize).unwrap();
+        let buffer = terminal.backend().buffer();
+        let screen = (0..buffer.area.height)
+            .map(|y| {
+                (0..buffer.area.width)
+                    .map(|x| buffer[(x, y)].symbol())
+                    .collect::<String>()
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(screen.contains("W403"));
+        assert!(screen.contains("80 columns and 24 rows"));
+    }
+    #[test]
     fn editor_handles_multiline_and_find_wraps() {
         let mut app = App::new(Options::default(), String::new());
         app.insert("x\ny x");
         app.vertical(false);
         assert_eq!(app.line_col(), (0, 1));
         app.search = "x".into();
-        app.find(false);
+        app.find_next();
         assert_eq!(app.cursor, 4);
-        app.find(false);
+        app.find_next();
         assert_eq!(app.cursor, 0);
         app.search = "missing".into();
-        app.find(false);
+        app.find_next();
         assert_eq!(app.message, "No matches");
     }
     #[test]
@@ -960,6 +1302,29 @@ mod tests {
         assert_eq!(app.status(), "Failed");
         app.insert("z");
         assert_eq!(app.status(), "Outdated");
+    }
+    #[test]
+    fn reflow_preserves_retained_source_and_current_failure() {
+        let mut app = App::new(
+            Options {
+                breaking: true,
+                ..Options::default()
+            },
+            "new".into(),
+        );
+        app.retained = Some("old".into());
+        app.render_width = Some(640);
+        app.failed = true;
+        app.diagnostic = "current render failed".into();
+        app.apply_reflow("old", 800, 800, DynamicImage::new_rgba8(2, 2));
+        assert_eq!(app.render_width, Some(800));
+        assert_eq!(app.retained.as_deref(), Some("old"));
+        assert_eq!(app.source(), "new");
+        assert_eq!(app.status(), "Failed");
+        assert_eq!(app.diagnostic, "current render failed");
+        app.apply_reflow("old", 900, 1000, DynamicImage::new_rgba8(3, 3));
+        app.apply_reflow("superseded", 1000, 1000, DynamicImage::new_rgba8(3, 3));
+        assert_eq!(app.render_width, Some(800));
     }
     #[test]
     fn preview_does_not_edit_source() {
@@ -1068,6 +1433,56 @@ mod tests {
                 "W205 was clipped at width {width}:\n{screen}"
             );
         }
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn minimum_size_fits_warnings_and_file_entry() {
+        let dir = std::env::temp_dir().join(format!("rateq minimum {}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let output = dir.join("other.png");
+        std::fs::write(&output, b"existing").unwrap();
+        let mut app = App::new(Options::default(), "new".into());
+        app.files = Files::new(dir.clone(), Some("original.txt".into()));
+        app.retained = Some("old".into());
+        app.open_file(FileType::Png, false);
+        path(&mut app, &output);
+        app.file_entry.as_mut().unwrap().candidates =
+            Some((0..12).map(|i| format!("item-{i:02}.png")).collect());
+        let mut terminal =
+            ratatui::Terminal::new(ratatui::backend::TestBackend::new(MIN_COLUMNS, MIN_ROWS))
+                .unwrap();
+        terminal
+            .draw(|frame| draw(frame, &mut app, &Picker::halfblocks()))
+            .unwrap();
+        let buffer = terminal.backend().buffer();
+        let screen = (0..buffer.area.height)
+            .map(|y| {
+                (0..buffer.area.width)
+                    .map(|x| buffer[(x, y)].symbol())
+                    .collect::<String>()
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        for value in [
+            "W201",
+            "W202",
+            "W203",
+            "W205",
+            "File Type: PNG",
+            "File to write:",
+            "ENTER Complete",
+        ] {
+            assert!(
+                screen.contains(value),
+                "{value} missing at minimum size:\n{screen}"
+            );
+        }
+        assert!(screen
+            .split_whitespace()
+            .collect::<Vec<_>>()
+            .join(" ")
+            .contains("predates a failed render"));
         std::fs::remove_dir_all(dir).unwrap();
     }
 
