@@ -4,7 +4,9 @@ Open product decisions are listed below. Final decisions live in the official do
 
 ## Product Decisions
 
-All current product decisions are resolved.
+| Decision | Status | Details |
+|---|---|---|
+| Minimum terminal size | Open | Determine the minimum columns and rows, and specify behavior below that size, accounting for the windows, entry and navigation bars, and access to complete messages and warnings in each interaction. See [Layout](session.md#layout). |
 
 ## Decision Log
 

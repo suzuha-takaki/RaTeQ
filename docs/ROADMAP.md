@@ -19,8 +19,9 @@ Sources [Cargo versions](https://doc.rust-lang.org/cargo/reference/manifest.html
 |---|---|
 | PoC | Rendering, preview, input, and scheduling experiments. See [Commands](../poc/README.md). |
 | `0.1.0` | Usable editor and RaTeX preview on the primary development terminal |
-| `0.2.0` | Source save, PNG/SVG export, and file-handling flows |
-| `0.3.0` | Remaining modes and Help in the target WezTerm environments |
+| `0.2.0` | Source save, PNG/SVG export, and file-entry flows |
+| `0.3.0` | Determine the minimum terminal size and behavior below it, remaining modes, and Help in the target WezTerm environments |
+| `0.4.0` | Persistence setup and resume |
 | `1.0.0-beta.1` | Intended v1 features complete, gathering feedback |
 | `1.0.0-rc.1` | Release validation and packaging |
 | `1.0.0` | Documented v1 behavior and support targets fulfilled |

@@ -148,6 +148,7 @@ Single-window mode starts in the Editor window.
 - In single-window mode, the active Editor or Preview window uses the available window area.
 - Keep Entry bar, Navigation bar, and message access visible when the terminal is small.
 - Show [W403](messages.md#w403) when the Editor/Preview area cannot fit.
+- The minimum dimensions and below-minimum behavior are open decisions; see [Design](DESIGN.md#product-decisions).
 
 ## Preview Flow
 

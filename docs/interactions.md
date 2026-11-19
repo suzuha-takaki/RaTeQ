@@ -51,6 +51,7 @@ File to write :
 | Enter | Acknowledge displayed warnings and submit the full path |
 | Ctrl+X | Cancel a normal save/export and return to the previous Edit view |
 | Tab | Complete the path |
+| ↑ ↓ | Scroll completion candidates when displayed |
 
 Validation errors hide `ENTER Complete` and block writing until corrected. During save-before-exit, Ctrl+X returns to the Exit entry bar. A failed write keeps the File entry bar open with the error and allows retry.
 
