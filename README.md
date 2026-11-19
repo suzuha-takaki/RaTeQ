@@ -19,6 +19,10 @@ To open an existing UTF-8 source file, pass its path:
 
 If the file does not exist, RaTeQ starts with an empty buffer. Type a math fragment such as `\frac{1}{2}` and press **Enter** to render it. Run `./target/release/rateq --help` for the command-line options.
 
+Press **Ctrl+G** for contextual Help and **Ctrl+X** to return. RaTeQ requires a terminal of at least 80 columns by 24 rows; a resize screen appears below that size.
+
+The `--resume` option is not yet available; application-data setup and resume are planned for `0.4.0`.
+
 ## Save and export
 
 | Key | Where | Action |
@@ -38,11 +42,9 @@ Export requires a successful render. If the source has since changed or the late
 
 For unnamed sources, RaTeQ suggests a filename made from the word lists in [assets/names.toml](assets/names.toml). One name is reused for source and export suggestions. The lists are embedded in the binary, so rebuild after editing them; if either list is empty, the suggested stem is `equation`.
 
-## Current status
+## Development
 
-The `0.2.0` implementation includes source saving, PNG/SVG export, and file entry.minimum terminal sizing, application-data directories (thus, `--resume` cannot reopen a file yet), contextual Help, and reflow of an outdated preview will be implemented in later versions.
-
-Terminal compatibility and release packaging needs validation. Run the tests with:
+Run the tests with:
 
 ```sh
 cargo test
