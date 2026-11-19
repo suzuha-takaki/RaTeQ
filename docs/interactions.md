@@ -178,6 +178,26 @@ Y Yes   N No
 
 If the source has no unsaved changes, exit immediately. Otherwise, open the Exit entry bar.
 
+## Persistence Setup
+
+This interaction appears when Resume is requested without an approved persistence location. Above the three numbered choices, show `Resume needs permission to store the path of the last source file saved.` followed by a blank line. Color the choice numbers and the directory, resume-history, and location-record labels for visibility. Show the proposed application-data directory, resume-history file, and location record before approval. Long location details are scrollable; require scrolling to the end before accepting approval when they do not fit on screen.
+
+| Context | Key | Action |
+|---|---|---|
+| Choices | 1 | Approve the default locations |
+| Choices | 2 | Enter a custom application-data directory |
+| Choices | 3 | Continue without persistence |
+| Choices | X or Ctrl+X | Cancel and exit |
+| Custom directory | Enter | Review the locations |
+| Custom directory | Ctrl+U | Clear the directory field |
+| Custom directory | Ctrl+X | Return to the choices |
+| Confirmation | Y | Approve the displayed locations |
+| Confirmation | N | Edit the directory |
+| Confirmation | Ctrl+X | Return to the choices |
+| Choices or confirmation | ↑ ↓ | Scroll the location details |
+
+Ctrl+G opens contextual Help from setup; Ctrl+X in Help returns to the exact setup state. An empty custom location shows [E210](messages.md#e210). Setup failures show [E209](messages.md#e209), remain visible, and allow retry.
+
 ## Help
 
 Ctrl+G opens Help from every interaction, including Find. List all public keyboard shortcuts for the calling session, active window, and interaction, including shortcuts omitted from the Navigation bar.

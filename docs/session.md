@@ -75,22 +75,25 @@ Run help on its own with rateq -h, or version on its own with rateq -v.
 
 ## Resume
 
-- Record the path of the last successfully saved source file.
-- `--resume` reopens that file.
-- With no saved-file history, report [E105](messages.md#e105).
+- When persistence is enabled, record the path of the last successfully saved source file.
+- `--resume` reopens that file. If persistence has not been enabled, first offer [Persistence](#persistence) setup.
+- With persistence enabled but no saved-file history, report [E105](messages.md#e105). This includes the first Resume request after enabling persistence; a later successful source save establishes the history.
 - If the recorded file is missing or unreadable, report [E206](messages.md#e206) and preserve the recorded path for diagnosis.
+- If resume history cannot be read, report [E208](messages.md#e208). If a source save succeeds but the history cannot be updated, keep the successful save and show [W206](messages.md#w206); when saving on exit, report it in the terminal after the UI closes.
 - Store resume metadata in the approved application-data location. See [Persistence](#persistence).
 
 ## Persistence
 
-- Use platform-appropriate application directories by default.
-- On the first interactive launch, ask for approval before creating application directories or writing persistent application data.
-- Show the proposed locations and offer Use defaults, Customize, or Cancel.
-- Customize lets the user choose the application-data location.
-- Remember the approved location and reuse it on future launches.
+- Persistence is opt-in. Start ordinary interactive sessions without a setup prompt when no location has been approved; do not create application-data directories or write persistent application data.
+- When Resume is requested without an approved location, show the proposed platform-appropriate locations and offer Use defaults, Customize, Continue without persistence, or Cancel. Do not introduce a separate CLI option for opting out.
+- Customize lets the user choose the application-data location. Show every location that will be written, including any separate record needed to find a custom location, before obtaining approval.
+- Use defaults or Customize approves the displayed locations. Remember the approved location and reuse it on future launches. Record resume history only after subsequent successful source saves.
+- Continue without persistence creates no application-data directories and writes no persistent application data. Resume is skipped, and the session starts with an empty unnamed source using the other requested session flags. Show an in-app message explaining that Resume was skipped.
 - Cancel exits before creating application directories or writing application data.
-- Standalone CLI help/version run directly without opening persistence setup.
-- Source saves and exports follow the paths submitted through File entry.
+- A later Resume request prompts again if no location has been approved; the choice to continue without persistence is not stored.
+- Standalone CLI help/version run directly without opening persistence setup. Source saves and exports follow the paths submitted through File entry, whether or not persistence is enabled.
+- If the approved-location record cannot be read, report [E207](messages.md#e207) on Resume. For an ordinary launch, keep editing and source saves available without persistence and show [W207](messages.md#w207).
+- Setup controls are defined in [Persistence Setup](interactions.md#persistence-setup).
 
 ## File Identity
 
