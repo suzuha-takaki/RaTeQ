@@ -1,6 +1,6 @@
 # RaTeQ
 
-RaTeQ is a terminal editor for LaTeX math fragments on macOS/Linux, with a live & manualpreview.
+RaTeQ is a terminal editor for LaTeX math fragments on macOS/Linux, with a live & manual preview.
 > **Status:** Active development.
 > **[v1.0.0-beta.1](https://github.com/suzuha-takaki/RaTeQ/tree/v1.0.0-beta.1)** is now available. See [Releases](https://github.com/suzuha-takaki/RaTeQ/releases) for more detail.
 
