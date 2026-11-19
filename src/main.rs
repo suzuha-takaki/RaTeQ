@@ -1,5 +1,6 @@
 mod cli;
 mod files;
+mod graphics;
 mod persistence;
 mod render;
 mod setup;

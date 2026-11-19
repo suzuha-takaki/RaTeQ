@@ -1,6 +1,7 @@
 use crate::{
     cli::Options,
     files::{self, FileType, Files},
+    graphics,
     persistence::Store,
     render,
 };
@@ -1132,7 +1133,7 @@ pub fn run(
     persistence: Option<Store>,
     startup_message: Option<String>,
 ) -> io::Result<()> {
-    let picker = Picker::from_query_stdio().unwrap_or_else(|_| Picker::halfblocks());
+    let (picker, warning) = graphics::detect();
     let mut terminal = ratatui::try_init()?;
     if let Err(e) = execute!(io::stdout(), EnableBracketedPaste) {
         ratatui::restore();
@@ -1147,6 +1148,9 @@ pub fn run(
         app.deadline = Some(Instant::now() + Duration::from_millis(300));
     }
     let result = (|| -> io::Result<()> {
+        if let Some(warning) = warning {
+            graphics::show_warning(&mut terminal, &warning)?;
+        }
         loop {
             let size = terminal.size()?;
             let too_small = below_minimum(size.width, size.height);
