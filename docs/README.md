@@ -82,6 +82,8 @@ In single-window mode, the active window is Editor or Preview. Interaction table
 
 Check versions when preparing a release and report which OS/CPU, terminal version, and features worked, together with observed limitations. Broader terminal coverage can follow those results.
 
+For `1.0.0-beta.1`, the `0.5.0` preview was checked in WezTerm `20240203-110809-5046fc22` on macOS 26.6.2 (ARM64) and Ubuntu 24.04.5 LTS (ARM64) in OrbStack using the macOS WezTerm frontend. Other terminal and platform combinations have not been verified as release targets.
+
 ### Graphics
 
 At each interactive launch, use ratatui-image to detect terminal graphics. When Kitty graphics is selected, also query whether the terminal confirms support for the Unicode image placeholders RaTeQ uses. A missing or older response does not prove the feature is unsupported. For WezTerm, if Kitty placeholder support cannot be confirmed, use its iTerm2-compatible image protocol instead; this applies on any operating system.
